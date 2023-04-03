@@ -4,6 +4,7 @@ Import infrastructure managed outside of Pulumi IaC into Pulumi Insights. Curren
 To run:
 
 1. Clone this repo
+3. `cd pulumi-insights-import`
 2. Run `pulumi stack init <organization/aws-account-name>`
 3. Set the appropriate AWS region you'd like to import resources from `export AWS_REGION=us-west-2`
 4. Run the importer `go run main.go
