@@ -37,11 +37,8 @@ type importSpec struct {
 
 func main() {
 
-	/*
-		3. turn those type tokens into cloud control api resource type tokens
-		4. construct a pulumi import resource file
-		5. shell out and run pulumi import.
-	*/
+	incremental := isIncremental()
+
 	pkgSpec, err := getAWSNativeSchema()
 	if err != nil {
 		panic(err)
@@ -90,6 +87,11 @@ func main() {
 							Type: k,
 							Name: fmt.Sprintf("%s%s%d", namespace, parts[2], resourceNumber),
 						})
+
+						if incremental {
+							// currently, just swallow import errors and keep going
+							_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
+						}
 					}
 				}
 				return true
@@ -111,9 +113,12 @@ func main() {
 		panic(err)
 	}
 
-	err = callPulumiImport()
-	if err != nil {
-		panic(err)
+	// only run bulk import if not in incremental mode
+	if !incremental {
+		err = callBulkPulumiImport()
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -155,10 +160,28 @@ func writeImportFile(imports importFile) error {
 	return nil
 }
 
-func callPulumiImport() error {
+func callBulkPulumiImport() error {
 	// run pulumi import
 	cmd := exec.Command("pulumi", "import", "-p", "1", "-f", "import.json", "--yes")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func callIncrementalPulumiImport(imp importSpec) error {
+	// run pulumi import
+	cmd := exec.Command("pulumi", "import", "--yes", "--skip-preview", imp.Type, imp.Name, imp.ID)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// check for presence of --incremental flag
+func isIncremental() bool {
+	for _, arg := range os.Args {
+		if arg == "--incremental" {
+			return true
+		}
+	}
+	return false
 }
