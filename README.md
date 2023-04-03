@@ -13,3 +13,4 @@ TODO:
 - Document how to hook this up to Pulumi Deployments + OIDC so this can be 1-click from the console
 - Unfortunately this is very very slow until https://github.com/pulumi/pulumi-aws-native/issues/854 is fixed 
   as we are incrementally calling `pulumi import` on each resource we discover.
+- resource naming is not consistent, as key order isn't guaranteed to be stable, and resource numbering can't be guaranteed
