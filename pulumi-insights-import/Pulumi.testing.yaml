@@ -1,0 +1,2 @@
+config:
+  aws-native:maxRetries: "1000000"

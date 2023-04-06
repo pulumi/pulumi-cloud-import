@@ -94,6 +94,8 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:cloudformation:PublicTypeVersion": true,
 	// error: resource 'AwsDataCatalog' does not exist
 	"aws-native:athena:DataCatalog": true,
+	// error: resource 'LOCKE' does not exist
+	"aws-native:appflow:Connector": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
