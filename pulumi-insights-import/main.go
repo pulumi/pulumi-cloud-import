@@ -96,6 +96,8 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:athena:DataCatalog": true,
 	// error: resource 'LOCKE' does not exist
 	"aws-native:appflow:Connector": true,
+	// name collison Duplicate resource URN 'urn:pulumi:testing::pulumi-insights-import::aws-native:efs:FileSystem::EFSFileSystemfs0dce0ba5'; try giving it a unique name
+	"aws-native:efs:FileSystem": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
