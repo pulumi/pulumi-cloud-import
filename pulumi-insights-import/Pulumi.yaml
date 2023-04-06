@@ -1,5 +1,6 @@
 name: pulumi-insights-import
-runtime: go
+runtime:
+  name: go
   options:
     binary: importer
 description: A minimal Pulumi YAML program
