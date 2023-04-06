@@ -1,4 +1,4 @@
-name: pulumi-insights-import
+name: pulumi-cloud-import
 runtime:
   name: go
   options:

@@ -1,4 +1,4 @@
-module github.com/pulumi/pulumi-insights-import-demo/pulumi-insights-import
+module github.com/pulumi/pulumi-cloud-import-demo/pulumi-cloud-import
 
 go 1.19
 
