@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/pulumi/pulumi/pkg/v3/codegen/dotnet"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -35,10 +37,66 @@ type importSpec struct {
 	Properties        []string `json:"properties"`
 }
 
+type Mode int64
+
+const (
+	ImportMode Mode = iota
+	IncrementalImportMode
+	ReadMode
+)
+
 func main() {
-
 	incremental := isIncremental()
+	isImportMode := isImportMode()
+	if incremental && !isImportMode {
+		panic("--incremental can only be used with --import")
+	}
 
+	// pulumi read resource mode
+	if !isImportMode {
+		pulumi.Run(func(ctx *pulumi.Context) error {
+
+			_, err := buildImportSpec(ctx, ReadMode)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+	} else {
+		mode := ImportMode
+		if incremental {
+			mode = IncrementalImportMode
+		}
+		imports, err := buildImportSpec(nil, mode)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("Total resources: %d", len(imports.Resources))
+
+		err = writeImportFile(imports)
+		if err != nil {
+			panic(err)
+		}
+
+		// only run bulk import if not in incremental mode
+		if !incremental {
+			err = callBulkPulumiImport()
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+
+var resourcesToSkip = map[string]bool{
+	// 'Account is not registered as a publisher' error
+	"aws-native:cloudformation:PublicTypeVersion": true,
+	// error: resource 'AwsDataCatalog' does not exist
+	"aws-native:athena:DataCatalog": true,
+}
+
+func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	pkgSpec, err := getAWSNativeSchema()
 	if err != nil {
 		panic(err)
@@ -59,9 +117,11 @@ func main() {
 		panic(err)
 	}
 	client := cloudcontrolapi.New(sess)
-	totalResources := 0
 
 	for k := range pkgSpec.Resources {
+		if _, ok := resourcesToSkip[k]; ok {
+			continue
+		}
 		parts := strings.Split(k, ":")
 
 		namespace, ok := csharpInfo.Namespaces[parts[1]]
@@ -71,7 +131,6 @@ func main() {
 		cloudControlType := fmt.Sprintf("AWS::%s::%s", namespace, parts[2])
 		fmt.Println(cloudControlType)
 
-		resourceNumber := 0
 		params := &cloudcontrolapi.ListResourcesInput{
 			MaxResults: aws.Int64(100),
 			TypeName:   aws.String(cloudControlType),
@@ -79,18 +138,22 @@ func main() {
 		err = client.ListResourcesPages(params,
 			func(page *cloudcontrolapi.ListResourcesOutput, lastPage bool) bool {
 				for _, r := range page.ResourceDescriptions {
-					resourceNumber++
-					totalResources++
 					if r.Identifier != nil {
-						imports.Resources = append(imports.Resources, importSpec{
+						resource := importSpec{
 							ID:   *r.Identifier,
 							Type: k,
-							Name: fmt.Sprintf("%s%s%d", namespace, parts[2], resourceNumber),
-						})
+							Name: clearString(fmt.Sprintf("%s%s%s", namespace, parts[2], *r.Identifier)),
+						}
+						imports.Resources = append(imports.Resources, resource)
 
-						if incremental {
+						if mode == IncrementalImportMode {
 							// currently, just swallow import errors and keep going
 							_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
+						} else if mode == ReadMode {
+							var res pulumi.CustomResourceState
+							// currently ignore errors
+							fmt.Println(resource.Name)
+							_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
 						}
 					}
 				}
@@ -106,20 +169,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("Total resources: %d", totalResources)
-
-	err = writeImportFile(imports)
-	if err != nil {
-		panic(err)
-	}
-
-	// only run bulk import if not in incremental mode
-	if !incremental {
-		err = callBulkPulumiImport()
-		if err != nil {
-			panic(err)
-		}
-	}
+	return imports, nil
 }
 
 // download https://raw.githubusercontent.com/pulumi/pulumi-aws-native/master/provider/cmd/pulumi-resource-aws-native/schema.json
@@ -184,4 +234,20 @@ func isIncremental() bool {
 		}
 	}
 	return false
+}
+
+// check for presence of --import flag
+func isImportMode() bool {
+	for _, arg := range os.Args {
+		if arg == "--import" {
+			return true
+		}
+	}
+	return false
+}
+
+var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9 ]+`)
+
+func clearString(str string) string {
+	return nonAlphanumericRegex.ReplaceAllString(str, "")
 }

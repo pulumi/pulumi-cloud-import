@@ -1,6 +1,3 @@
 name: pulumi-insights-import
-runtime: yaml
+runtime: go
 description: A minimal Pulumi YAML program
-outputs: {}
-resources: {}
-variables: {}
