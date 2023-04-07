@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/pulumi/pulumi/pkg/v3/codegen/dotnet"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
@@ -108,8 +109,6 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		panic(err)
 	}
 
-	seen := map[string]bool{}
-
 	csharpRaw := pkgSpec.Language["csharp"]
 	csharpInfo := dotnet.CSharpPackageInfo{}
 	if err := json.Unmarshal(csharpRaw, &csharpInfo); err != nil {
@@ -126,59 +125,101 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	}
 	client := cloudcontrolapi.New(sess)
 
+	importChan := make(chan importSpec)
+	var wg sync.WaitGroup
+
+	chunks := 3
+	pkgChunks := make([][]string, chunks)
+	index := 0
+	// split input ino N chunks
 	for k := range pkgSpec.Resources {
-		if _, ok := resourcesToSkip[k]; ok {
-			continue
-		}
-		parts := strings.Split(k, ":")
+		pkgChunks[index] = append(pkgChunks[index], k)
+		index++
+		index = index % chunks
+	}
 
-		namespace, ok := csharpInfo.Namespaces[parts[1]]
-		if !ok {
-			namespace = parts[1]
-		}
-		cloudControlType := fmt.Sprintf("AWS::%s::%s", namespace, parts[2])
-		fmt.Println(cloudControlType)
-
-		params := &cloudcontrolapi.ListResourcesInput{
-			MaxResults: aws.Int64(100),
-			TypeName:   aws.String(cloudControlType),
-		}
-		err = client.ListResourcesPages(params,
-			func(page *cloudcontrolapi.ListResourcesOutput, lastPage bool) bool {
-				for _, r := range page.ResourceDescriptions {
-					key := clearString(*r.Identifier)
-					if seen[key] {
-						continue
-					}
-					seen[key] = true
-					if r.Identifier != nil {
-						resource := importSpec{
-							ID:   *r.Identifier,
-							Type: k,
-							Name: clearString(fmt.Sprintf("%s%s%s", namespace, parts[2], *r.Identifier)),
-						}
-						imports.Resources = append(imports.Resources, resource)
-
-						if mode == IncrementalImportMode {
-							// currently, just swallow import errors and keep going
-							_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
-						} else if mode == ReadMode {
-							var res pulumi.CustomResourceState
-							// currently ignore errors
-							fmt.Println(resource.Name)
-							_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
-						}
-					}
+	for i := 0; i < len(pkgChunks); i++ {
+		pkgs := pkgChunks[i]
+		wg.Add(1)
+		go func(pkgChunk []string) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("encountered error processing AWS resources: %v \n", r)
 				}
-				return true
-			})
+			}()
+			defer wg.Done()
 
-		// just print out errors as info for now
-		// as there are some resources that don't support ListResources
-		// or have special auth requirements.
-		// TODO -- handle rate limiting errors
-		if err != nil {
-			fmt.Println(err)
+			seen := map[string]bool{}
+			for _, k := range pkgChunk {
+				if _, ok := resourcesToSkip[k]; ok {
+					continue
+				}
+				parts := strings.Split(k, ":")
+
+				namespace, ok := csharpInfo.Namespaces[parts[1]]
+				if !ok {
+					namespace = parts[1]
+				}
+				cloudControlType := fmt.Sprintf("AWS::%s::%s", namespace, parts[2])
+
+				params := &cloudcontrolapi.ListResourcesInput{
+					MaxResults: aws.Int64(100),
+					TypeName:   aws.String(cloudControlType),
+				}
+				err = client.ListResourcesPages(params,
+					func(page *cloudcontrolapi.ListResourcesOutput, lastPage bool) bool {
+						for _, r := range page.ResourceDescriptions {
+							key := clearString(*r.Identifier)
+							if seen[key] {
+								continue
+							}
+							seen[key] = true
+							if r.Identifier != nil {
+								resource := importSpec{
+									ID:   *r.Identifier,
+									Type: k,
+									Name: clearString(fmt.Sprintf("%s%s%s", namespace, parts[2], *r.Identifier)),
+								}
+								importChan <- resource
+							}
+						}
+						return true
+					})
+
+				// just print out errors as info for now
+				// as there are some resources that don't support ListResources
+				// or have special auth requirements.
+				// TODO -- handle rate limiting errors
+				if err != nil {
+					fmt.Println(err)
+				}
+
+			}
+		}(pkgs)
+	}
+
+	go func() {
+		wg.Wait()
+		close(importChan)
+	}()
+
+loop:
+	for {
+		select {
+		case resource, ok := <-importChan:
+			if !ok {
+				break loop
+			}
+			imports.Resources = append(imports.Resources, resource)
+
+			if mode == IncrementalImportMode {
+				// currently, just swallow import errors and keep going
+				_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
+			} else if mode == ReadMode {
+				var res pulumi.CustomResourceState
+				// currently ignore errors
+				_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
+			}
 		}
 	}
 
