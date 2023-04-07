@@ -108,6 +108,8 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		panic(err)
 	}
 
+	seen := map[string]bool{}
+
 	csharpRaw := pkgSpec.Language["csharp"]
 	csharpInfo := dotnet.CSharpPackageInfo{}
 	if err := json.Unmarshal(csharpRaw, &csharpInfo); err != nil {
@@ -144,6 +146,11 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		err = client.ListResourcesPages(params,
 			func(page *cloudcontrolapi.ListResourcesOutput, lastPage bool) bool {
 				for _, r := range page.ResourceDescriptions {
+					key := clearString(*r.Identifier)
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
 					if r.Identifier != nil {
 						resource := importSpec{
 							ID:   *r.Identifier,
