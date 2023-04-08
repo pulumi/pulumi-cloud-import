@@ -123,7 +123,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	if err != nil {
 		panic(err)
 	}
-	client := cloudcontrolapi.New(sess)
+	client := cloudcontrolapi.New(sess, aws.NewConfig().WithMaxRetries(1000))
 
 	importChan := make(chan importSpec)
 	var wg sync.WaitGroup
