@@ -1,0 +1,6 @@
+name: pulumi-cloud-import-azure
+runtime:
+  name: go
+  options:
+    binary: importer
+description: All of your Azure Resources imported into Pulumi

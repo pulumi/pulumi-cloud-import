@@ -1,0 +1,6 @@
+name: pulumi-cloud-import-aws
+runtime:
+  name: go
+  options:
+    binary: importer
+description: All of your AWS resources imported into Pulumi
