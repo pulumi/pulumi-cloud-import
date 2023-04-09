@@ -108,16 +108,62 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 	pluralize := pluralize.NewClient()
 
-	importChan := make(chan importSpec)
 	var wg sync.WaitGroup
 
-	// right now this chunking is unnecessary, but in leaving the structure in place as in the future we might support
-	// parallelizing input by resource group.
-	chunks := 1
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		panic(fmt.Sprintf("Authentication failure: %+v", err))
+	}
+
+	// Azure SDK Azure Resource Management clients accept the credential as a parameter
+	resourceClient, err := armresources.NewClient(subscriptionID, cred, nil)
+	if err != nil {
+		panic(err)
+	}
+	resourceGroupClient, err := armresources.NewResourceGroupsClient(subscriptionID, cred, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	rgPager := resourceGroupClient.NewListPager(nil)
+
+	resourceGroups := []string{}
+
+	for rgPager.More() {
+		page, err := rgPager.NextPage(context.Background())
+		if err != nil {
+			log.Fatalf("Failed to list resources: %+v", err)
+		}
+
+		for _, resource := range page.ResourceGroupListResult.Value {
+			if resource.Location != nil && *resource.Location != location {
+				continue
+			}
+			id := *resource.ID
+			resourceGroups = append(resourceGroups, id)
+			name := *resource.Name
+			resource := importSpec{
+				ID:   id,
+				Type: "azure-native:resources:ResourceGroup",
+				Name: clearString(name),
+			}
+			imports.Resources = append(imports.Resources, resource)
+		}
+	}
+
+	// create a buffered channel. we want to register all resource groups first, and then process resources so that parents are present
+	importChan := make(chan importSpec, len(imports.Resources))
+
+	for _, resourceGroup := range imports.Resources {
+		importChan <- resourceGroup
+	}
+
+	// currently one goroutine per resource group. This could be too many for large subscriptions.
+	chunks := len(resourceGroups)
 
 	for i := 0; i < chunks; i++ {
 		wg.Add(1)
-		go func() {
+		go func(resourceGroup string) {
 			defer func() {
 				if r := recover(); r != nil {
 					fmt.Printf("encountered error processing Azure resources: %v \n", r)
@@ -127,17 +173,13 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 			seen := map[string]bool{}
 
-			cred, err := azidentity.NewDefaultAzureCredential(nil)
-			if err != nil {
-				panic(fmt.Sprintf("Authentication failure: %+v", err))
-			}
+			filter := fmt.Sprintf("location eq '%s'", location)
 
-			// Azure SDK Azure Resource Management clients accept the credential as a parameter
-			client, _ := armresources.NewClient(subscriptionID, cred, nil)
-			locationFilter := fmt.Sprintf("location eq '%s'", location)
+			rgParts := strings.Split(resourceGroup, "/")
+			rgName := rgParts[len(rgParts)-1]
 
-			pager := client.NewListPager(&armresources.ClientListOptions{
-				Filter: &locationFilter,
+			pager := resourceClient.NewListByResourceGroupPager(rgName, &armresources.ClientListByResourceGroupOptions{
+				Filter: &filter,
 			})
 			for pager.More() {
 				page, err := pager.NextPage(context.Background())
@@ -170,21 +212,24 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 					seen[id] = true
 
 					resource := importSpec{
-						ID:   id,
-						Type: typeToken,
-						Name: clearString(name),
+						ID:     id,
+						Type:   typeToken,
+						Name:   clearString(name),
+						Parent: resourceGroup,
 					}
 					importChan <- resource
 				}
 			}
 
-		}()
+		}(resourceGroups[i])
 	}
 
 	go func() {
 		wg.Wait()
 		close(importChan)
 	}()
+
+	rgs := map[string]pulumi.Resource{}
 
 loop:
 	for {
@@ -201,7 +246,14 @@ loop:
 			} else if mode == ReadMode {
 				var res pulumi.CustomResourceState
 				// currently ignore errors
-				_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
+				if resource.Type == "azure-native:resources:ResourceGroup" {
+					rgs[resource.ID] = &res
+				}
+				opts := []pulumi.ResourceOption{}
+				if p, ok := rgs[resource.Parent]; ok {
+					opts = append(opts, pulumi.Parent(p))
+				}
+				_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res, opts...)
 			}
 		}
 	}
@@ -293,7 +345,7 @@ func clearString(str string) string {
 func getLocation() string {
 	location := os.Getenv("ARM_LOCATION")
 	if location == "" {
-		location = "uswest2"
+		location = "westus2"
 	}
 	return location
 }
