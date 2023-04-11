@@ -13,10 +13,14 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/gertd/go-pluralize"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
@@ -91,6 +95,19 @@ func main() {
 
 }
 
+type tokenWrapper struct {
+	auth.Authorizer
+}
+
+func (t tokenWrapper) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	tok, err := t.Token(ctx, nil)
+	at := azcore.AccessToken{
+		Token: tok.AccessToken,
+	}
+
+	return at, err
+}
+
 var resourcesToSkip = map[string]bool{}
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
@@ -110,9 +127,26 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 	var wg sync.WaitGroup
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(fmt.Sprintf("Authentication failure: %+v", err))
+	oidcToken := getOidcToken()
+
+	var cred azcore.TokenCredential
+
+	if oidcToken != "" {
+		c, err := auth.NewOIDCAuthorizer(context.Background(), auth.OIDCAuthorizerOptions{
+			FederatedAssertion: oidcToken,
+			TenantId:           getTenantID(),
+			ClientId:           getClientID(),
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		cred = tokenWrapper{c}
+	} else {
+		cred, err = azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			panic(fmt.Sprintf("Authentication failure: %+v", err))
+		}
 	}
 
 	// Azure SDK Azure Resource Management clients accept the credential as a parameter
@@ -357,4 +391,19 @@ func getSubscriptionID() string {
 		panic("ARM_SUBSCRIPTION_ID env var must be set")
 	}
 	return subscriptionID
+}
+
+// reads PULUMI_OIDC_TOKEN env var or returns "" if none is set
+func getOidcToken() string {
+	return os.Getenv("PULUMI_OIDC_TOKEN")
+}
+
+// reads AZURE_CLIENT_ID env var or returns "" if none is set
+func getClientID() string {
+	return os.Getenv("AZURE_CLIENT_ID")
+}
+
+// reads AZURE_TENANT_ID env var or returns "" if none is set
+func getTenantID() string {
+	return os.Getenv("AZURE_TENANT_ID")
 }
