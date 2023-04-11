@@ -21,6 +21,7 @@ import (
 	"github.com/gertd/go-pluralize"
 	"github.com/hashicorp/go-azure-sdk/sdk/auth"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/pulumi/pulumi-azure-native/sdk/go/azure/resources"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
@@ -115,16 +116,22 @@ func (t tokenWrapper) GetToken(ctx context.Context, options policy.TokenRequestO
 var resourcesToSkip = map[string]bool{}
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
+	imports := importFile{
+		Resources: []importSpec{},
+	}
+
+	// OIDC sanity check
+	resourceGroup, err := resources.NewResourceGroup(ctx, "resourceGroup", nil)
+	if err != nil {
+		return imports, err
+	}
+
 	subscriptionID := getSubscriptionID()
 	location := getLocation()
 
 	pkgSpec, err := getAzureNativeSchema()
 	if err != nil {
 		panic(err)
-	}
-
-	imports := importFile{
-		Resources: []importSpec{},
 	}
 
 	pluralize := pluralize.NewClient()
@@ -406,12 +413,12 @@ func getOidcToken() string {
 	return os.Getenv("ARM_OIDC_TOKEN")
 }
 
-// reads AZURE_CLIENT_ID env var or returns "" if none is set
+// reads ARM_CLIENT_ID env var or returns "" if none is set
 func getClientID() string {
-	return os.Getenv("AZURE_CLIENT_ID")
+	return os.Getenv("ARM_CLIENT_ID")
 }
 
-// reads AZURE_TENANT_ID env var or returns "" if none is set
+// reads ARM_TENANT_ID env var or returns "" if none is set
 func getTenantID() string {
-	return os.Getenv("AZURE_TENANT_ID")
+	return os.Getenv("ARM_TENANT_ID")
 }
