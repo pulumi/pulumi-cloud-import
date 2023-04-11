@@ -136,6 +136,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	var cred azcore.TokenCredential
 
 	if oidcToken != "" {
+		fmt.Println(oidcToken, getTenantID(), getClientID())
 		env := *environments.AzurePublic()
 		c, err := auth.NewOIDCAuthorizer(context.Background(), auth.OIDCAuthorizerOptions{
 			FederatedAssertion: oidcToken,
