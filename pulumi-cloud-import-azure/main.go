@@ -121,7 +121,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	}
 
 	// OIDC sanity check
-	resourceGroup, err := resources.NewResourceGroup(ctx, "resourceGroup", nil)
+	_, err := resources.NewResourceGroup(ctx, "resourceGroup", nil)
 	if err != nil {
 		return imports, err
 	}
