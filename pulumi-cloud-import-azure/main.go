@@ -126,6 +126,8 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		return imports, err
 	}
 
+	return imports, nil
+
 	subscriptionID := getSubscriptionID()
 	location := getLocation()
 
