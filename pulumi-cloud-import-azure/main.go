@@ -132,11 +132,13 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	var cred azcore.TokenCredential
 
 	if oidcToken != "" {
+		env := *environments.AzurePublic()
 		c, err := auth.NewOIDCAuthorizer(context.Background(), auth.OIDCAuthorizerOptions{
 			FederatedAssertion: oidcToken,
 			TenantId:           getTenantID(),
 			ClientId:           getClientID(),
-			Environment:        *environments.AzurePublic(),
+			Environment:        env,
+			Api:                env.ResourceManager,
 		})
 		if err != nil {
 			panic(err)
