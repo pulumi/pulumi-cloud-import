@@ -101,11 +101,14 @@ type tokenWrapper struct {
 
 func (t tokenWrapper) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
 	tok, err := t.Token(ctx, nil)
+	if err != nil {
+		panic(err)
+	}
 	at := azcore.AccessToken{
 		Token: tok.AccessToken,
 	}
 
-	return at, err
+	return at, nil
 }
 
 var resourcesToSkip = map[string]bool{}
