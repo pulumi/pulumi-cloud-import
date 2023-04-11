@@ -401,9 +401,9 @@ func getSubscriptionID() string {
 	return subscriptionID
 }
 
-// reads PULUMI_OIDC_TOKEN env var or returns "" if none is set
+// reads ARM_OIDC_TOKEN env var or returns "" if none is set
 func getOidcToken() string {
-	return os.Getenv("PULUMI_OIDC_TOKEN")
+	return os.Getenv("ARM_OIDC_TOKEN")
 }
 
 // reads AZURE_CLIENT_ID env var or returns "" if none is set
