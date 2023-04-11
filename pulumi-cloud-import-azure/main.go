@@ -105,7 +105,8 @@ func (t tokenWrapper) GetToken(ctx context.Context, options policy.TokenRequestO
 		panic(err)
 	}
 	at := azcore.AccessToken{
-		Token: tok.AccessToken,
+		Token:     tok.AccessToken,
+		ExpiresOn: tok.Expiry,
 	}
 
 	return at, nil
