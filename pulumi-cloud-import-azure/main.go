@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -21,6 +20,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/gertd/go-pluralize"
 	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
@@ -136,6 +136,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 			FederatedAssertion: oidcToken,
 			TenantId:           getTenantID(),
 			ClientId:           getClientID(),
+			Environment:        *environments.AzurePublic(),
 		})
 		if err != nil {
 			panic(err)
