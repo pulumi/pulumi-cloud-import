@@ -21,7 +21,7 @@ import (
 	"github.com/gertd/go-pluralize"
 	"github.com/hashicorp/go-azure-sdk/sdk/auth"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
-	"github.com/pulumi/pulumi-azure-native/sdk/go/azure/resources"
+	"github.com/pulumi/pulumi-azure/sdk/v4/go/azure/core"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
@@ -119,9 +119,11 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	imports := importFile{
 		Resources: []importSpec{},
 	}
+	_, err := core.NewResourceGroup(ctx, "server-rg", nil)
+	// OIDC sanity check azure
 
-	// OIDC sanity check
-	_, err := resources.NewResourceGroup(ctx, "resourceGroup", nil)
+	// OIDC sanity check azure-native
+	//_, err := resources.NewResourceGroup(ctx, "resourceGroup", nil)
 	if err != nil {
 		return imports, err
 	}
