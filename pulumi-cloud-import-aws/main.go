@@ -121,6 +121,8 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:efs:FileSystem": true,
 	// FAILED: [RSLVR-00903] Cannot tag Auto Defined Rule.
 	"aws-native:route53resolver:ResolverRule": true,
+	// parameter ParameterGroupName is not a valid identifier. Identifiers must begin with a letter; must contain only ASCII letters
+	"aws-native:memorydb:ParameterGroup": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
