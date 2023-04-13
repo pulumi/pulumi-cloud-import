@@ -307,7 +307,7 @@ func isImportMode() bool {
 func getConcurrentWorkers() int {
 	workers, err := strconv.Atoi(os.Getenv("PULUMI_CLOUD_IMPORT_WORKERS"))
 	if err != nil {
-		return 3
+		return 10
 	}
 	return workers
 }
