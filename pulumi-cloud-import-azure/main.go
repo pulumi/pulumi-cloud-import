@@ -14,9 +14,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/gertd/go-pluralize"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
@@ -91,9 +95,30 @@ func main() {
 
 }
 
+type tokenWrapper struct {
+	auth.Authorizer
+}
+
+func (t tokenWrapper) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	tok, err := t.Token(ctx, nil)
+	if err != nil {
+		panic(err)
+	}
+	at := azcore.AccessToken{
+		Token:     tok.AccessToken,
+		ExpiresOn: tok.Expiry,
+	}
+
+	return at, nil
+}
+
 var resourcesToSkip = map[string]bool{}
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
+	imports := importFile{
+		Resources: []importSpec{},
+	}
+
 	subscriptionID := getSubscriptionID()
 	location := getLocation()
 
@@ -102,17 +127,33 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		panic(err)
 	}
 
-	imports := importFile{
-		Resources: []importSpec{},
-	}
-
 	pluralize := pluralize.NewClient()
 
 	var wg sync.WaitGroup
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		panic(fmt.Sprintf("Authentication failure: %+v", err))
+	oidcToken := getOidcToken()
+
+	var cred azcore.TokenCredential
+
+	if oidcToken != "" {
+		env := *environments.AzurePublic()
+		c, err := auth.NewOIDCAuthorizer(context.Background(), auth.OIDCAuthorizerOptions{
+			FederatedAssertion: oidcToken,
+			TenantId:           getTenantID(),
+			ClientId:           getClientID(),
+			Environment:        env,
+			Api:                env.ResourceManager,
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		cred = tokenWrapper{c}
+	} else {
+		cred, err = azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			panic(fmt.Sprintf("Authentication failure: %+v", err))
+		}
 	}
 
 	// Azure SDK Azure Resource Management clients accept the credential as a parameter
@@ -231,30 +272,23 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 	rgs := map[string]pulumi.Resource{}
 
-loop:
-	for {
-		select {
-		case resource, ok := <-importChan:
-			if !ok {
-				break loop
-			}
-			imports.Resources = append(imports.Resources, resource)
+	for resource := range importChan {
+		imports.Resources = append(imports.Resources, resource)
 
-			if mode == IncrementalImportMode {
-				// currently, just swallow import errors and keep going
-				_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
-			} else if mode == ReadMode {
-				var res pulumi.CustomResourceState
-				// currently ignore errors
-				if resource.Type == "azure-native:resources:ResourceGroup" {
-					rgs[resource.ID] = &res
-				}
-				opts := []pulumi.ResourceOption{}
-				if p, ok := rgs[resource.Parent]; ok {
-					opts = append(opts, pulumi.Parent(p))
-				}
-				_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res, opts...)
+		if mode == IncrementalImportMode {
+			// currently, just swallow import errors and keep going
+			_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
+		} else if mode == ReadMode {
+			var res pulumi.CustomResourceState
+			// currently ignore errors
+			if resource.Type == "azure-native:resources:ResourceGroup" {
+				rgs[resource.ID] = &res
 			}
+			opts := []pulumi.ResourceOption{}
+			if p, ok := rgs[resource.Parent]; ok {
+				opts = append(opts, pulumi.Parent(p))
+			}
+			_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res, opts...)
 		}
 	}
 
@@ -350,11 +384,41 @@ func getLocation() string {
 	return location
 }
 
-// reads ARM_SUBSCRIPTION_ID env var or panics if none is set
+// reads ARM_SUBSCRIPTION_ID env var or ARM_SUBSCRIPTION_ID env var or panics if none is set
 func getSubscriptionID() string {
 	subscriptionID := os.Getenv("ARM_SUBSCRIPTION_ID")
+	if subscriptionID == "" {
+		subscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
+	}
 	if subscriptionID == "" {
 		panic("ARM_SUBSCRIPTION_ID env var must be set")
 	}
 	return subscriptionID
+}
+
+// reads ARM_OIDC_TOKEN env var or AZURE_OIDC_TOKEN env var returns "" if none is set
+func getOidcToken() string {
+	token := os.Getenv("ARM_OIDC_TOKEN")
+	if token == "" {
+		token = os.Getenv("AZURE_OIDC_TOKEN")
+	}
+	return token
+}
+
+// reads ARM_CLIENT_ID env var or AZURE_CLIENT_ID env var or returns "" if none is set
+func getClientID() string {
+	clientID := os.Getenv("ARM_CLIENT_ID")
+	if clientID == "" {
+		clientID = os.Getenv("AZURE_CLIENT_ID")
+	}
+	return clientID
+}
+
+// reads ARM_TENANT_ID env var or AZURE_TENANT_ID env var or returns "" if none is set
+func getTenantID() string {
+	tenantID := os.Getenv("ARM_TENANT_ID")
+	if tenantID == "" {
+		tenantID = os.Getenv("AZURE_TENANT_ID")
+	}
+	return tenantID
 }
