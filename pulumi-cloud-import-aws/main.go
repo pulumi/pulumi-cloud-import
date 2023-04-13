@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -44,7 +43,6 @@ type Mode int64
 
 const (
 	ImportMode Mode = iota
-	IncrementalImportMode
 	ReadMode
 )
 
@@ -67,28 +65,16 @@ func (r CustomRetryer) ShouldRetry(req *request.Request) bool {
 }
 
 func main() {
-	incremental := isIncremental()
 	isImportMode := isImportMode()
-	if incremental && !isImportMode {
-		panic("--incremental can only be used with --import")
-	}
 
 	// pulumi read resource mode
 	if !isImportMode {
 		pulumi.Run(func(ctx *pulumi.Context) error {
-
 			_, err := buildImportSpec(ctx, ReadMode)
-			if err != nil {
-				return err
-			}
-
-			return nil
+			return err
 		})
 	} else {
 		mode := ImportMode
-		if incremental {
-			mode = IncrementalImportMode
-		}
 		imports, err := buildImportSpec(nil, mode)
 		if err != nil {
 			panic(err)
@@ -98,14 +84,6 @@ func main() {
 		err = writeImportFile(imports)
 		if err != nil {
 			panic(err)
-		}
-
-		// only run bulk import if not in incremental mode
-		if !incremental {
-			err = callBulkPulumiImport()
-			if err != nil {
-				panic(err)
-			}
 		}
 	}
 }
@@ -169,7 +147,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		index = index % chunks
 	}
 
-	for i := 0; i < len(pkgChunks); i++ {
+	for i := 0; i < chunks; i++ {
 		pkgs := pkgChunks[i]
 		wg.Add(1)
 		go func(pkgChunk []string, i int) {
@@ -223,7 +201,6 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 				// just print out errors as info for now
 				// as there are some resources that don't support ListResources
 				// or have special auth requirements.
-				// TODO -- handle rate limiting errors
 				if err != nil {
 					fmt.Println(err)
 				}
@@ -240,10 +217,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 	for resource := range importChan {
 		imports.Resources = append(imports.Resources, resource)
-		if mode == IncrementalImportMode {
-			// currently, just swallow import errors and keep going
-			_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
-		} else if mode == ReadMode {
+		if mode == ReadMode {
 			var res pulumi.CustomResourceState
 			// currently ignore errors
 			_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
@@ -290,32 +264,6 @@ func writeImportFile(imports importFile) error {
 	}
 
 	return nil
-}
-
-func callBulkPulumiImport() error {
-	// run pulumi import
-	cmd := exec.Command("pulumi", "import", "-p", "1", "-f", "import.json", "--yes")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func callIncrementalPulumiImport(imp importSpec) error {
-	// run pulumi import
-	cmd := exec.Command("pulumi", "import", "--yes", "--skip-preview", imp.Type, imp.Name, imp.ID)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// check for presence of --incremental flag
-func isIncremental() bool {
-	for _, arg := range os.Args {
-		if arg == "--incremental" {
-			return true
-		}
-	}
-	return false
 }
 
 // check for presence of --import flag
