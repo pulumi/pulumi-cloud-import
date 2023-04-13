@@ -272,30 +272,23 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 	rgs := map[string]pulumi.Resource{}
 
-loop:
-	for {
-		select {
-		case resource, ok := <-importChan:
-			if !ok {
-				break loop
-			}
-			imports.Resources = append(imports.Resources, resource)
+	for resource := range importChan {
+		imports.Resources = append(imports.Resources, resource)
 
-			if mode == IncrementalImportMode {
-				// currently, just swallow import errors and keep going
-				_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
-			} else if mode == ReadMode {
-				var res pulumi.CustomResourceState
-				// currently ignore errors
-				if resource.Type == "azure-native:resources:ResourceGroup" {
-					rgs[resource.ID] = &res
-				}
-				opts := []pulumi.ResourceOption{}
-				if p, ok := rgs[resource.Parent]; ok {
-					opts = append(opts, pulumi.Parent(p))
-				}
-				_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res, opts...)
+		if mode == IncrementalImportMode {
+			// currently, just swallow import errors and keep going
+			_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
+		} else if mode == ReadMode {
+			var res pulumi.CustomResourceState
+			// currently ignore errors
+			if resource.Type == "azure-native:resources:ResourceGroup" {
+				rgs[resource.ID] = &res
 			}
+			opts := []pulumi.ResourceOption{}
+			if p, ok := rgs[resource.Parent]; ok {
+				opts = append(opts, pulumi.Parent(p))
+			}
+			_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res, opts...)
 		}
 	}
 
