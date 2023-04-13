@@ -123,6 +123,8 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:ec2:PrefixList": true,
 	// consistent 500s
 	"aws-native:scheduler:ScheduleGroup": true,
+	// 500s
+	"aws-native:ecs:CapacityProvider": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
