@@ -8,7 +8,6 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources v1.1.0
 	github.com/gertd/go-pluralize v0.2.1
 	github.com/hashicorp/go-azure-sdk v0.20230408.1052134
-	github.com/pulumi/pulumi-azure/sdk/v4 v4.42.0
 	github.com/pulumi/pulumi/pkg/v3 v3.60.1
 	github.com/pulumi/pulumi/sdk/v3 v3.60.1
 )
