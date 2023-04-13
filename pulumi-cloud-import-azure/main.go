@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -51,28 +50,16 @@ const (
 )
 
 func main() {
-	incremental := isIncremental()
 	isImportMode := isImportMode()
-	if incremental && !isImportMode {
-		panic("--incremental can only be used with --import")
-	}
 
 	// pulumi read resource mode
 	if !isImportMode {
 		pulumi.Run(func(ctx *pulumi.Context) error {
-
 			_, err := buildImportSpec(ctx, ReadMode)
-			if err != nil {
-				return err
-			}
-
-			return nil
+			return err
 		})
 	} else {
 		mode := ImportMode
-		if incremental {
-			mode = IncrementalImportMode
-		}
 		imports, err := buildImportSpec(nil, mode)
 		if err != nil {
 			panic(err)
@@ -82,14 +69,6 @@ func main() {
 		err = writeImportFile(imports)
 		if err != nil {
 			panic(err)
-		}
-
-		// only run bulk import if not in incremental mode
-		if !incremental {
-			err = callBulkPulumiImport()
-			if err != nil {
-				panic(err)
-			}
 		}
 	}
 
@@ -168,7 +147,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 	rgPager := resourceGroupClient.NewListPager(nil)
 
-	resourceGroups := []string{}
+	resourceGroups := []importSpec{}
 
 	for rgPager.More() {
 		page, err := rgPager.NextPage(context.Background())
@@ -181,21 +160,20 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 				continue
 			}
 			id := *resource.ID
-			resourceGroups = append(resourceGroups, id)
 			name := *resource.Name
 			resource := importSpec{
 				ID:   id,
 				Type: "azure-native:resources:ResourceGroup",
 				Name: clearString(name),
 			}
-			imports.Resources = append(imports.Resources, resource)
+			resourceGroups = append(resourceGroups, resource)
 		}
 	}
 
 	// create a buffered channel. we want to register all resource groups first, and then process resources so that parents are present
-	importChan := make(chan importSpec, len(imports.Resources))
+	importChan := make(chan importSpec, len(resourceGroups))
 
-	for _, resourceGroup := range imports.Resources {
+	for _, resourceGroup := range resourceGroups {
 		importChan <- resourceGroup
 	}
 
@@ -262,7 +240,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 				}
 			}
 
-		}(resourceGroups[i])
+		}(resourceGroups[i].ID)
 	}
 
 	go func() {
@@ -273,12 +251,13 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	rgs := map[string]pulumi.Resource{}
 
 	for resource := range importChan {
-		imports.Resources = append(imports.Resources, resource)
-
-		if mode == IncrementalImportMode {
-			// currently, just swallow import errors and keep going
-			_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
-		} else if mode == ReadMode {
+		// create a new import spec as the parent needs to be a URN, so just strip it our for now
+		imports.Resources = append(imports.Resources, importSpec{
+			ID:   resource.ID,
+			Type: resource.Type,
+			Name: resource.Name,
+		})
+		if mode == ReadMode {
 			var res pulumi.CustomResourceState
 			// currently ignore errors
 			if resource.Type == "azure-native:resources:ResourceGroup" {
@@ -331,32 +310,6 @@ func writeImportFile(imports importFile) error {
 	}
 
 	return nil
-}
-
-func callBulkPulumiImport() error {
-	// run pulumi import
-	cmd := exec.Command("pulumi", "import", "-p", "1", "-f", "import.json", "--yes")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func callIncrementalPulumiImport(imp importSpec) error {
-	// run pulumi import
-	cmd := exec.Command("pulumi", "import", "--yes", "--skip-preview", imp.Type, imp.Name, imp.ID)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// check for presence of --incremental flag
-func isIncremental() bool {
-	for _, arg := range os.Args {
-		if arg == "--incremental" {
-			return true
-		}
-	}
-	return false
 }
 
 // check for presence of --import flag
