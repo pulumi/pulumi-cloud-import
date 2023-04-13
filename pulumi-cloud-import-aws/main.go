@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pulumi/pulumi/pkg/v3/codegen/dotnet"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
@@ -64,6 +66,12 @@ func (r CustomRetryer) ShouldRetry(req *request.Request) bool {
 	return r.DefaultRetryer.ShouldRetry(req)
 }
 
+func debugLog(a ...any) {
+	if os.Getenv("PULUMI_CLOUD_IMPORT_DEBUG") != "" {
+		fmt.Println(a...)
+	}
+}
+
 func main() {
 	isImportMode := isImportMode()
 
@@ -101,6 +109,14 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:route53resolver:ResolverRule": true,
 	// parameter ParameterGroupName is not a valid identifier. Identifiers must begin with a letter; must contain only ASCII letters
 	"aws-native:memorydb:ParameterGroup": true,
+	// robomaker has been shut down
+	"aws-native:robomaker:Fleet":                        true,
+	"aws-native:robomaker:Robot":                        true,
+	"aws-native:robomaker:RobotApplication":             true,
+	"aws-native:robomaker:RobotApplicationVersion":      true,
+	"aws-native:robomaker:SimulationApplication":        true,
+	"aws-native:robomaker:SimulationApplicationVersion": true,
+	"aws-native:robomaker:SimulationJob":                true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
@@ -126,18 +142,21 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	}
 	c := aws.NewConfig()
 	c.Retryer = r
-	// uncomment to enable AWS debug logs
-	// c.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody)
+	if os.Getenv("PULUMI_CLOUD_IMPORT_DEBUG") != "" {
+		c.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody)
+	}
 
 	sess, err := session.NewSession(c)
 	if err != nil {
 		panic(err)
 	}
 
-	importChan := make(chan importSpec, 10000)
+	var ops uint64
+
+	importChan := make(chan importSpec, 100000)
 	var wg sync.WaitGroup
 
-	chunks := 3
+	chunks := getConcurrentWorkers()
 	pkgChunks := make([][]string, chunks)
 	index := 0
 	// split input ino N chunks
@@ -192,6 +211,8 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 									Type: k,
 									Name: clearString(fmt.Sprintf("%s%s%s", namespace, parts[2], *r.Identifier)),
 								}
+								atomic.AddUint64(&ops, 1)
+								debugLog("worker:", i+1, "count:", atomic.LoadUint64(&ops))
 								importChan <- resource
 							}
 						}
@@ -274,6 +295,15 @@ func isImportMode() bool {
 		}
 	}
 	return false
+}
+
+// getConcurrentWorkers the number of workers specified in PULUMI_CLOUD_IMPORT_WORKERS or returns a default of 3
+func getConcurrentWorkers() int {
+	workers, err := strconv.Atoi(os.Getenv("PULUMI_CLOUD_IMPORT_WORKERS"))
+	if err != nil {
+		return 3
+	}
+	return workers
 }
 
 var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9 ]+`)

@@ -28,6 +28,8 @@ $ export AWS_REGION=us-west-2 # the region of your AWS account
 $ pulumi up --skip-preview --show-reads # run the aws cloud import program
 ```
 
+The program uses 3 concurrent workers by default due to rate limits on the AWS cloud control API. You can control the concurrency through an environment variable: `PULUMI_CLOUD_IMPORT_WORKERS=10`.
+
 ### Azure
 
 If you've never used Pulumi with Azure before we recommend you start first with the [Get Started with Azure](https://www.pulumi.com/docs/get-started/azure/) guide that helps you configure credentials and install dependencies.
@@ -42,6 +44,10 @@ $ export ARM_LOCATION=westus2 # the region of your Azure Subscription that you'd
 $ export ARM_SUBSCRIPTION_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx # ID of the Subscription that you'd like to read from
 $ pulumi up --skip-preview --show-reads # run the azure cloud import program
 ```
+
+### Debugging
+
+Some programs provide additional debug logging. You can turn it on by setting `PULUMI_CLOUD_IMPORT_DEBUG=true` before running the program.
 
 ## Pulumi Cloud
 
