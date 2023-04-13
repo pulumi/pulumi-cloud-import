@@ -18,6 +18,8 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/client"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudcontrolapi"
 )
@@ -45,6 +47,24 @@ const (
 	IncrementalImportMode
 	ReadMode
 )
+
+type CustomRetryer struct {
+	client.DefaultRetryer
+}
+
+// ShouldRetry overrides the SDK's built in DefaultRetryer adding customization
+// to not retry 500 internal server errors status codes.
+// TODO: some AWS services consistently return 500 internal server errors
+// when we hit the API. We shoudl open bugs against AWS for these.
+func (r CustomRetryer) ShouldRetry(req *request.Request) bool {
+	if req.HTTPResponse.StatusCode == 500 {
+		// Don't retry any 500 status codes.
+		return false
+	}
+
+	// Fallback to SDK's built in retry rules
+	return r.DefaultRetryer.ShouldRetry(req)
+}
 
 func main() {
 	incremental := isIncremental()
@@ -101,6 +121,8 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:efs:FileSystem": true,
 	// FAILED: [RSLVR-00903] Cannot tag Auto Defined Rule.
 	"aws-native:route53resolver:ResolverRule": true,
+	// parameter ParameterGroupName is not a valid identifier. Identifiers must begin with a letter; must contain only ASCII letters
+	"aws-native:memorydb:ParameterGroup": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
@@ -119,11 +141,20 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		Resources: []importSpec{},
 	}
 
-	sess, err := session.NewSession()
+	r := CustomRetryer{
+		DefaultRetryer: client.DefaultRetryer{
+			NumMaxRetries: 1000,
+		},
+	}
+	c := aws.NewConfig()
+	c.Retryer = r
+	// uncomment to enable AWS debug logs
+	// c.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody)
+
+	sess, err := session.NewSession(c)
 	if err != nil {
 		panic(err)
 	}
-	client := cloudcontrolapi.New(sess, aws.NewConfig().WithMaxRetries(1000))
 
 	importChan := make(chan importSpec, 10000)
 	var wg sync.WaitGroup
@@ -141,13 +172,16 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	for i := 0; i < len(pkgChunks); i++ {
 		pkgs := pkgChunks[i]
 		wg.Add(1)
-		go func(pkgChunk []string) {
+		go func(pkgChunk []string, i int) {
 			defer func() {
 				if r := recover(); r != nil {
 					fmt.Printf("encountered error processing AWS resources: %v \n", r)
 				}
 			}()
 			defer wg.Done()
+
+			// AWS clients are not safe for concurrent use by multiple goroutines.
+			client := cloudcontrolapi.New(sess)
 
 			seen := map[string]bool{}
 			for _, k := range pkgChunk {
@@ -195,7 +229,8 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 				}
 
 			}
-		}(pkgs)
+			fmt.Printf("worker %d of %d completed\n", i+1, chunks)
+		}(pkgs, i)
 	}
 
 	go func() {
@@ -203,24 +238,17 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		close(importChan)
 	}()
 
-loop:
-	for {
-		select {
-		case resource, ok := <-importChan:
-			if !ok {
-				break loop
-			}
-			imports.Resources = append(imports.Resources, resource)
-
-			if mode == IncrementalImportMode {
-				// currently, just swallow import errors and keep going
-				_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
-			} else if mode == ReadMode {
-				var res pulumi.CustomResourceState
-				// currently ignore errors
-				_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
-			}
+	for resource := range importChan {
+		imports.Resources = append(imports.Resources, resource)
+		if mode == IncrementalImportMode {
+			// currently, just swallow import errors and keep going
+			_ = callIncrementalPulumiImport(imports.Resources[len(imports.Resources)-1])
+		} else if mode == ReadMode {
+			var res pulumi.CustomResourceState
+			// currently ignore errors
+			_ = ctx.ReadResource(resource.Type, resource.Name, pulumi.ID(resource.ID), nil, &res)
 		}
+
 	}
 
 	return imports, nil
