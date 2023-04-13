@@ -117,6 +117,12 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:robomaker:SimulationApplication":        true,
 	"aws-native:robomaker:SimulationApplicationVersion": true,
 	"aws-native:robomaker:SimulationJob":                true,
+	// returns 500 instead of 404
+	"aws-native:codepipeline:CustomActionType": true,
+	// returns consistent 500s
+	"aws-native:ec2:PrefixList": true,
+	// consistent 500s
+	"aws-native:codepipeline:CustomActionType": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
