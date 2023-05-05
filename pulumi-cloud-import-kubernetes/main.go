@@ -1,19 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
-	"github.com/pulumi/pulumi/pkg/v3/codegen/dotnet"
-	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,17 +69,7 @@ func main() {
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
-	pkgSpec, err := getKubernetesNativeSchema()
-	if err != nil {
-		panic(err)
-	}
-
-	csharpRaw := pkgSpec.Language["csharp"]
-	csharpInfo := dotnet.CSharpPackageInfo{}
-	if err := json.Unmarshal(csharpRaw, &csharpInfo); err != nil {
-		panic(err)
-	}
-
+	start := time.Now()
 	imports := importFile{
 		Resources: []importSpec{},
 	}
@@ -137,6 +123,8 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		return x.GetName()
 	}
 
+	var ops uint64
+
 	importChan := make(chan importSpec, 100000)
 	var wg sync.WaitGroup
 
@@ -150,6 +138,9 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		index = index % chunks
 	}
 
+	setupTime := time.Since(start)
+	debugLog(fmt.Sprintf("Initialization time: %s\n", setupTime))
+
 	for i := 0; i < chunks; i++ {
 		pkgs := pkgChunks[i]
 		wg.Add(1)
@@ -161,6 +152,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 			}()
 			defer wg.Done()
 
+			start := time.Now()
 			for _, group := range pkgChunk {
 				for _, res := range group.APIResources {
 					gv, err := schema.ParseGroupVersion(group.GroupVersion)
@@ -175,17 +167,21 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 						//fmt.Fprintf(os.Stderr, "Failed to list objects for %s: %v\n", gvr.String(), err)
 						continue
 					}
-					for _, i := range obj.Items {
+					for _, item := range obj.Items {
 						r := importSpec{
-							Token: token(&i),
-							Name:  id(&i),
-							ID:    id(&i),
+							Token: token(&item),
+							Name:  id(&item),
+							ID:    id(&item),
 						}
 
+						atomic.AddUint64(&ops, 1)
 						importChan <- r
 					}
 				}
 			}
+			stop := time.Since(start)
+			debugLog("worker:", i+1, "count:", atomic.LoadUint64(&ops), "read time:", stop)
+			fmt.Printf("worker %d of %d completed\n", i+1, chunks)
 		}(pkgs, i)
 	}
 
@@ -207,28 +203,6 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	return imports, nil
 }
 
-// download https://raw.githubusercontent.com/pulumi/pulumi-kubernetes/master/provider/cmd/pulumi-resource-kubernetes/schema.json
-// and parse it into a pschema.PackageSpec
-func getKubernetesNativeSchema() (*pschema.PackageSpec, error) {
-	schemaURL := "https://raw.githubusercontent.com/pulumi/pulumi-kubernetes/master/provider/cmd/pulumi-resource-kubernetes/schema.json"
-
-	resp, err := http.Get(schemaURL)
-	if err != nil {
-		return nil, err
-	}
-
-	defer resp.Body.Close()
-	var schema pschema.PackageSpec
-	buf := new(bytes.Buffer)
-	buf.ReadFrom(resp.Body)
-	respByte := buf.Bytes()
-	if err := json.Unmarshal(respByte, &schema); err != nil {
-		return nil, err
-	}
-
-	return &schema, nil
-}
-
 // write import file to disk
 func writeImportFile(imports importFile) error {
 	// write the import file to disk
@@ -237,7 +211,7 @@ func writeImportFile(imports importFile) error {
 		return err
 	}
 
-	err = ioutil.WriteFile("import.json", importFile, 0644)
+	err = os.WriteFile("import.json", importFile, 0644)
 	if err != nil {
 		return err
 	}
@@ -262,10 +236,4 @@ func getConcurrentWorkers() int {
 		return 10
 	}
 	return workers
-}
-
-var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9 ]+`)
-
-func clearString(str string) string {
-	return nonAlphanumericRegex.ReplaceAllString(str, "")
 }
