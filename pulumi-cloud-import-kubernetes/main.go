@@ -10,20 +10,18 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+	"sync"
 
 	"github.com/pulumi/pulumi/pkg/v3/codegen/dotnet"
 	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 type importFile struct {
@@ -32,14 +30,9 @@ type importFile struct {
 }
 
 type importSpec struct {
-	Type              string   `json:"type"`
-	Name              string   `json:"name"`
-	ID                string   `json:"id"`
-	Parent            string   `json:"parent"`
-	Provider          string   `json:"provider"`
-	Version           string   `json:"version"`
-	PluginDownloadURL string   `json:"pluginDownloadUrl"`
-	Properties        []string `json:"properties"`
+	Token string `json:"token"`
+	Name  string `json:"name"`
+	ID    string `json:"id"`
 }
 
 type Mode int64
@@ -128,13 +121,6 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		os.Exit(1)
 	}
 
-	type res struct {
-		Token string
-		Name  string
-		ID    string
-	}
-	resources := map[string]res{}
-
 	token := func(x *unstructured.Unstructured) string {
 		var gv string
 		if x.GroupVersionKind().Group == "" {
@@ -151,33 +137,65 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		return x.GetName()
 	}
 
-	// TODO: may want to parallelize
-	for _, group := range apiResources {
-		for _, resource := range group.APIResources {
-			gv, err := schema.ParseGroupVersion(group.GroupVersion)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to parse GroupVersion: %v\n", err)
-				continue
-			}
-			gvr := gv.WithResource(resource.Name)
-			obj, err := dynamicClient.Resource(gvr).List(context.Background(), metav1.ListOptions{})
-			if err != nil {
-				// TODO: skip unsupported resource types
-				//fmt.Fprintf(os.Stderr, "Failed to list objects for %s: %v\n", gvr.String(), err)
-				continue
-			}
-			for _, i := range obj.Items {
-				r := res{
-					Token: token(&i),
-					Name:  id(&i),
-					ID:    id(&i),
-				}
+	importChan := make(chan importSpec, 100000)
+	var wg sync.WaitGroup
 
-				resources[r.Token] = r
-			}
-		}
+	chunks := getConcurrentWorkers()
+	pkgChunks := make([][]*metav1.APIResourceList, chunks)
+	index := 0
+	// split resource groups into N chunks
+	for _, group := range apiResources {
+		pkgChunks[index] = append(pkgChunks[index], group)
+		index++
+		index = index % chunks
 	}
-	for _, r := range resources {
+
+	for i := 0; i < chunks; i++ {
+		pkgs := pkgChunks[i]
+		wg.Add(1)
+		go func(pkgChunk []*metav1.APIResourceList, i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("encountered error processing AWS resources: %v \n", r)
+				}
+			}()
+			defer wg.Done()
+
+			for _, group := range pkgChunk {
+				for _, res := range group.APIResources {
+					gv, err := schema.ParseGroupVersion(group.GroupVersion)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to parse GroupVersion: %v\n", err)
+						continue
+					}
+					gvr := gv.WithResource(res.Name)
+					obj, err := dynamicClient.Resource(gvr).List(context.Background(), metav1.ListOptions{})
+					if err != nil {
+						// TODO: skip unsupported resource types
+						//fmt.Fprintf(os.Stderr, "Failed to list objects for %s: %v\n", gvr.String(), err)
+						continue
+					}
+					for _, i := range obj.Items {
+						r := importSpec{
+							Token: token(&i),
+							Name:  id(&i),
+							ID:    id(&i),
+						}
+
+						importChan <- r
+					}
+				}
+			}
+		}(pkgs, i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(importChan)
+	}()
+
+	for r := range importChan {
+		imports.Resources = append(imports.Resources, r)
 		if mode == ReadMode {
 			var res pulumi.CustomResourceState
 			// currently ignore errors
