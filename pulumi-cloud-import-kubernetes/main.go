@@ -104,6 +104,8 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 		fmt.Fprintf(os.Stderr, "Failed to load kubeconfig: %v\n", err)
 		os.Exit(1)
 	}
+	config.Burst = 120
+	config.QPS = 50
 
 	// Create Kubernetes clientset
 	clientset, err := kubernetes.NewForConfig(config)
