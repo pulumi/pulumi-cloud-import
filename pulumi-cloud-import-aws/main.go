@@ -125,6 +125,10 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:scheduler:ScheduleGroup": true,
 	// 500s
 	"aws-native:ecs:CapacityProvider": true,
+	// 400 "you don't have permissions"
+	"aws-native:organizations:Organization": true,
+	// 400 "List Handler returned status FAILED: Invalid request provided"
+	"aws-native:route53resolver:FirewallDomainList": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
