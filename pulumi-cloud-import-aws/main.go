@@ -129,6 +129,8 @@ var resourcesToSkip = map[string]bool{
 	"aws-native:organizations:Organization": true,
 	// 400 "List Handler returned status FAILED: Invalid request provided"
 	"aws-native:route53resolver:FirewallDomainList": true,
+	// 500 "List Handler returned status FAILED: Invalid request provided"
+	"aws-native:cloudformation:Stack": true,
 }
 
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
