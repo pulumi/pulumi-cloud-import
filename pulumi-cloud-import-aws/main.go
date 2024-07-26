@@ -13,8 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pulumi/pulumi/pkg/v3/codegen/dotnet"
-	pschema "github.com/pulumi/pulumi/pkg/v3/codegen/schema"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 
@@ -50,6 +48,15 @@ const (
 
 type CustomRetryer struct {
 	client.DefaultRetryer
+}
+
+// We download metadata from pulumi-aws-native to get supported types.
+// This sturct is only a subset of the full metadata.json
+type cfType struct {
+	CF string `json:"cf"`
+}
+type metadataResponse struct {
+	Resources map[string]cfType `json:"resources"`
 }
 
 // ShouldRetry overrides the SDK's built in DefaultRetryer adding customization
@@ -96,52 +103,10 @@ func main() {
 	}
 }
 
-var resourcesToSkip = map[string]bool{
-	// 'Account is not registered as a publisher' error
-	"aws-native:cloudformation:PublicTypeVersion": true,
-	// error: resource 'AwsDataCatalog' does not exist
-	"aws-native:athena:DataCatalog": true,
-	// error: resource 'LOCKE' does not exist
-	"aws-native:appflow:Connector": true,
-	// name collison Duplicate resource URN 'efs:FileSystem::EFSFileSystemfs0dce0ba5'; try giving it a unique name
-	"aws-native:efs:FileSystem": true,
-	// FAILED: [RSLVR-00903] Cannot tag Auto Defined Rule.
-	"aws-native:route53resolver:ResolverRule": true,
-	// parameter ParameterGroupName is not a valid identifier. Identifiers must begin with a letter; must contain only ASCII letters
-	"aws-native:memorydb:ParameterGroup": true,
-	// robomaker has been shut down
-	"aws-native:robomaker:Fleet":                        true,
-	"aws-native:robomaker:Robot":                        true,
-	"aws-native:robomaker:RobotApplication":             true,
-	"aws-native:robomaker:RobotApplicationVersion":      true,
-	"aws-native:robomaker:SimulationApplication":        true,
-	"aws-native:robomaker:SimulationApplicationVersion": true,
-	"aws-native:robomaker:SimulationJob":                true,
-	// returns 500 instead of 404
-	"aws-native:codepipeline:CustomActionType": true,
-	// returns consistent 500s
-	"aws-native:ec2:PrefixList": true,
-	// consistent 500s
-	"aws-native:scheduler:ScheduleGroup": true,
-	// 500s
-	"aws-native:ecs:CapacityProvider": true,
-	// 400 "you don't have permissions"
-	"aws-native:organizations:Organization": true,
-	// 400 "List Handler returned status FAILED: Invalid request provided"
-	"aws-native:route53resolver:FirewallDomainList": true,
-	// 500 "List Handler returned status FAILED: Invalid request provided"
-	"aws-native:cloudformation:Stack": true,
-}
-
 func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
-	pkgSpec, err := getAWSNativeSchema()
-	if err != nil {
-		panic(err)
-	}
 
-	csharpRaw := pkgSpec.Language["csharp"]
-	csharpInfo := dotnet.CSharpPackageInfo{}
-	if err := json.Unmarshal(csharpRaw, &csharpInfo); err != nil {
+	awsNativeTypesMap, err := getAWSNativeMetadata()
+	if err != nil {
 		panic(err)
 	}
 
@@ -174,7 +139,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	pkgChunks := make([][]string, chunks)
 	index := 0
 	// split input ino N chunks
-	for k := range pkgSpec.Resources {
+	for k := range *awsNativeTypesMap {
 		pkgChunks[index] = append(pkgChunks[index], k)
 		index++
 		index = index % chunks
@@ -196,17 +161,16 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 
 			seen := map[string]bool{}
 			for _, k := range pkgChunk {
-				if _, ok := resourcesToSkip[k]; ok {
+				if _, ok := unsupportedResources[k]; ok {
 					continue
 				}
-				parts := strings.Split(k, ":")
-
-				namespace, ok := csharpInfo.Namespaces[parts[1]]
+				cloudControlType, ok := (*awsNativeTypesMap)[k]
 				if !ok {
-					namespace = parts[1]
+					fmt.Println("Type definition not found - skipping", k)
+					// This shouldn't happen
+					continue
 				}
-				cloudControlType := fmt.Sprintf("AWS::%s::%s", namespace, parts[2])
-
+				parts := strings.Split(cloudControlType, "::")
 				params := &cloudcontrolapi.ListResourcesInput{
 					MaxResults: aws.Int64(100),
 					TypeName:   aws.String(cloudControlType),
@@ -223,23 +187,23 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 								resource := importSpec{
 									ID:   *r.Identifier,
 									Type: k,
-									Name: clearString(fmt.Sprintf("%s%s%s", namespace, parts[2], *r.Identifier)),
+									// eg. name it S3Bucket<bucketName>
+									Name: clearString(fmt.Sprintf("%s%s%s", parts[1], parts[2], *r.Identifier)),
 								}
 								atomic.AddUint64(&ops, 1)
 								debugLog("worker:", i+1, "count:", atomic.LoadUint64(&ops))
 								importChan <- resource
 							}
 						}
-						return true
+						return false
 					})
 
 				// just print out errors as info for now
 				// as there are some resources that don't support ListResources
 				// or have special auth requirements.
 				if err != nil {
-					fmt.Println(err)
+					fmt.Println("Failed to list resources of type", k, err)
 				}
-
 			}
 			fmt.Printf("worker %d of %d completed\n", i+1, chunks)
 		}(pkgs, i)
@@ -263,18 +227,18 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 	return imports, nil
 }
 
-// download https://raw.githubusercontent.com/pulumi/pulumi-aws-native/master/provider/cmd/pulumi-resource-aws-native/schema.json
-// and parse it into a pschema.PackageSpec
-func getAWSNativeSchema() (*pschema.PackageSpec, error) {
-	schemaURL := "https://raw.githubusercontent.com/pulumi/pulumi-aws-native/master/provider/cmd/pulumi-resource-aws-native/schema.json"
+// download https://raw.githubusercontent.com/pulumi/pulumi-aws-native/master/provider/cmd/pulumi-resource-aws-native/metadata.json
+// and parse it into a metadataResponse struct
+func getAWSNativeMetadata() (*map[string]string, error) {
+	metadataURL := "https://raw.githubusercontent.com/pulumi/pulumi-aws-native/master/provider/cmd/pulumi-resource-aws-native/metadata.json"
 
-	resp, err := http.Get(schemaURL)
+	resp, err := http.Get(metadataURL)
 	if err != nil {
 		return nil, err
 	}
 
 	defer resp.Body.Close()
-	var schema pschema.PackageSpec
+	var schema metadataResponse
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(resp.Body)
 	respByte := buf.Bytes()
@@ -282,7 +246,13 @@ func getAWSNativeSchema() (*pschema.PackageSpec, error) {
 		return nil, err
 	}
 
-	return &schema, nil
+	// map from pulumi-aws-native type to cloudformation type
+	typeMap := map[string]string{}
+	for k, v := range schema.Resources {
+		typeMap[k] = v.CF
+	}
+
+	return &typeMap, nil
 }
 
 // write import file to disk

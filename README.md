@@ -1,12 +1,13 @@
 # pulumi-cloud-import
+
 Pulumi Cloud Import is an open source project that uses [Pulumi](github.com/pulumi/pulumi) to read all of the resources within your cloud account. There is a dedicated Pulumi program for each supported cloud provider. If you'd like to see more clouds supported please [open an issue on GitHub](https://github.com/pulumi/pulumi-cloud-import/issues/new).
 
 Each import program for a given cloud provider follows the same general structure:
 
 1. Use the cloud provider's REST API to list and iterate through all resources in the given account and region/location.
 2. For each resource:
-    1. Map the cloud provider type to a Pulumi provider type token.
-    2. Call the pulumi method `ReadResource` with the resource's ID and provider type token. This loads the appropriate Pulumi provider that can read the full resource, all of it's metadata, encrypt all sensitive portions of the resource automatically, and store the result in the Pulumi state file.
+   1. Map the cloud provider type to a Pulumi provider type token.
+   2. Call the pulumi method `ReadResource` with the resource's ID and provider type token. This loads the appropriate Pulumi provider that can read the full resource, all of it's metadata, encrypt all sensitive portions of the resource automatically, and store the result in the Pulumi state file.
 
 Cloud Import programs use `ReadResource` which marks the resource as `external`, meaning the recource's lifecycle will not be managed by Pulumi and it will not be destroyed when you run `pulumi destroy`. `external` resources are discarded from the state file when you run `pulumi destroy` and no changes are made to the underlying resource or cloud account. As a result of this architecture, Cloud Import programs can be run with read-only credentials.
 
@@ -33,7 +34,7 @@ $ cd pulumi-cloud-import-aws
 $ pulumi stack init <org/stackname> # we recommend naming stacks accountName-regionName i.e. testing-us-west-2
 $ pulumi config set aws-native:maxRetries 25 # cloud control API has aggressive rate limiting, so we need to retry with exponential backoff
 $ export AWS_REGION=us-west-2 # the region of your AWS account
-$ pulumi up --skip-preview --show-reads # run the aws cloud import program
+$ pulumi up --skip-preview --show-reads --continue-on-error # run the aws cloud import program
 ```
 
 The program uses 3 concurrent workers by default due to rate limits on the AWS cloud control API. You can control the concurrency through an environment variable: `PULUMI_CLOUD_IMPORT_WORKERS=10`.
@@ -50,7 +51,7 @@ $ cd pulumi-cloud-import-azure
 $ pulumi stack init <org/stackname> # we recommend naming stacks subscriptionName-location i.e. testing-westus2
 $ export ARM_LOCATION=westus2 # the region of your Azure Subscription that you'd like to read from
 $ export ARM_SUBSCRIPTION_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx # ID of the Subscription that you'd like to read from
-$ pulumi up --skip-preview --show-reads # run the azure cloud import program
+$ pulumi up --skip-preview --show-reads --continue-on-error # run the azure cloud import program
 ```
 
 ### Kubernetes
@@ -63,7 +64,7 @@ Once you have your environment configured with Kubernetes credentials, run the f
 $ git clone https://github.com/pulumi/pulumi-cloud-import.git # cd into the cloned repo
 $ cd pulumi-cloud-import-kubernetes
 $ pulumi stack init <org/stackname>
-$ pulumi up --skip-preview --show-reads # run the Kubernetes cloud import program
+$ pulumi up --skip-preview --show-reads --continue-on-error # run the Kubernetes cloud import program
 ```
 
 ### Debugging
