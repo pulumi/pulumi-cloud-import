@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -159,9 +160,9 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 			// AWS clients are not safe for concurrent use by multiple goroutines.
 			client := cloudcontrolapi.New(sess)
 
-			seen := map[string]bool{}
+			seen := map[string]struct{}{}
 			for _, k := range pkgChunk {
-				if _, ok := unsupportedResources[k]; ok {
+				if slices.Contains(unsupportedResources, k) {
 					continue
 				}
 				cloudControlType, ok := (*awsNativeTypesMap)[k]
@@ -179,10 +180,10 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 					func(page *cloudcontrolapi.ListResourcesOutput, lastPage bool) bool {
 						for _, r := range page.ResourceDescriptions {
 							key := clearString(*r.Identifier)
-							if seen[key] {
+							if _, ok := seen[key]; ok {
 								continue
 							}
-							seen[key] = true
+							seen[key] = struct{}{}
 							if r.Identifier != nil {
 								resource := importSpec{
 									ID:   *r.Identifier,
