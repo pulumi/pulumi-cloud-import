@@ -195,7 +195,7 @@ func buildImportSpec(ctx *pulumi.Context, mode Mode) (importFile, error) {
 								importChan <- resource
 							}
 						}
-						return false
+						return true
 					})
 
 				// just print out errors as info for now
